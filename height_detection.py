@@ -1,51 +1,103 @@
-# file: height_detection.py
-# author: Leiani Butler
+# height_detection.py
 
 import cv2
-import mediapipe as mp
-import numpy as np 
+import numpy as np
 
-mp_pose = mp.solutions.pose
 
 class HeightDetector:
-    def __init__(self):
-        self.pose = mp_pose.Pose(
-            static_image_mode=False,
-            model_complexity=1,
-            enable_segmentation=False,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
 
-        )
+    def __init__(self):
+
+        self.proto = "models/pose_deploy_linevec.prototxt"
+        self.weights = "models/pose_iter_160000.caffemodel"
+
+        print("Loading pose model...")
+        self.net = cv2.dnn.readNetFromCaffe(self.proto, self.weights)
+        print("Pose model loaded")
+
+        self.input_width = 256
+        self.input_height = 256
+
+        self.threshold = 0.2
+
+        self.HEAD = 0
+        self.R_ANKLE = 10
+        self.L_ANKLE = 13
+
+        self.POSE_PAIRS = [
+            (0, 1),
+            (1, 2), (2, 3),
+            (1, 5), (5, 6), (6, 7),
+            (1, 8), (8, 9), (9, 10),
+            (1, 11), (11, 12), (12, 13)
+        ]
 
     def get_height_pixels(self, frame):
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.pose.process(rgb)
-        
-        # debug to see if the pose is even working / being detected 
-        if results.pose_landmarks:
-            mp.solutions.drawing_utils.draw_landmarks(
-                frame,
-                results.pose_landmarks,
-                mp_pose.POSE_CONNECTIONS
-            )
 
-        if not results.pose_landmarks:
+        frame_h, frame_w = frame.shape[:2]
+
+        blob = cv2.dnn.blobFromImage(
+            frame,
+            scalefactor=1.0 / 255,
+            size=(self.input_width, self.input_height),
+            mean=(0, 0, 0),
+            swapRB=False,
+            crop=False
+        )
+
+        self.net.setInput(blob)
+        output = self.net.forward()
+
+        H = output.shape[2]
+        W = output.shape[3]
+
+        points = []
+
+        
+        # landmark detection
+        for i in range(15):
+
+            prob_map = output[0, i, :, :]
+            _, prob, _, point = cv2.minMaxLoc(prob_map)
+
+            x = int(frame_w * point[0] / W)
+            y = int(frame_h * point[1] / H)
+
+            if prob > self.threshold:
+                points.append((x, y))
+
+                # drawing landmark
+                cv2.circle(frame, (x, y), 5, (0, 255, 255), -1)
+            else:
+                points.append(None)
+
+     
+        for a, b in self.POSE_PAIRS:
+            if points[a] and points[b]:
+                cv2.line(frame, points[a], points[b], (0, 255, 0), 2)
+
+
+        # height calculation
+        head = points[self.HEAD]
+        r_ankle = points[self.R_ANKLE]
+        l_ankle = points[self.L_ANKLE]
+
+        if head is None:
             return None
 
-        
-        h, w = frame.shape[:2]
+        # choose choosing lowest ankle
+        ankle = None
+        if r_ankle and l_ankle:
+            ankle = r_ankle if r_ankle[1] > l_ankle[1] else l_ankle
+        else:
+            ankle = r_ankle or l_ankle
 
-        landmarks = results.pose_landmarks.landmark
+        if ankle is None:
+            return None
 
-        head = landmarks[mp_pose.PoseLandmark.NOSE]
-        left_ankle = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE]
-        right_ankle = landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE]
+        # draw height line
+        cv2.line(frame, head, ankle, (255, 0, 0), 3)
 
-
-        head_y = int(head.y * h)
-        ankle_y = int(max(left_ankle.y, right_ankle.y) * h)
-
-        height_pixels = abs(ankle_y - head_y)
+        height_pixels = abs(ankle[1] - head[1])
 
         return height_pixels

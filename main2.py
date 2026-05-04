@@ -20,17 +20,26 @@ This file:
 import os 
 
 # This is for fixing some Qt plugin errors due to Linux
-os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH", None)
-os.environ.pop("QT_QPA_FONTDIR", None)
+#os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH", None)
+#os.environ.pop("QT_QPA_FONTDIR", None)
+
+import os
+#os.environ["QT_QPA_PLATFORM"] = "wayland"   # or "xcb" if needed
+#os.environ["QT_WAYLAND_DISABLE_WINDOWDECORATION"] = "1"
 
 
 # libraries
+import matplotlib
+matplotlib.use('Qt5Agg')  # or 'QtAgg' depending on version
+import matplotlib.pyplot as plt
+
+
 import sys
 import numpy as np
 import time
 import cv2
 import datetime 
-import matplotlib.pyplot as plt 
+# import matplotlib.pyplot as plt 
 
 # all of the PyQt GUI 
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -43,7 +52,21 @@ from PyQt5.QtGui import QImage, QPixmap
 import processing2
 import gui2
 import camera2
-from height_detection import HeightDetector
+
+# cv2 height detection 
+from cv_height_detection import HeightDetector
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+# the line below is for the mediapipe height detection which doen't work on the pi
+#from height_detection import HeightDetector
+
+#height detection using OpenPose
+#from height_detection import HeightDetector
+
+
+import qrcode 
+from io import BytesIO
+
 
 # creating directory for saved images
 os.makedirs("saved_images", exist_ok=True)
@@ -74,21 +97,96 @@ class AppController:
         self.base_height = None         # reference height
         self.height_scale = 1.0         # scaling multiplier
 
+        self.height_history = []
+
+
+        """
+        QApplication.setAttribute(Qt.AA_SynthesizeMouseForUnhandledTouchEvents, True)
+        QApplication.setAttribute(Qt.AA_SynthesizeTouchForUnhandledMouseEvents, True)
 
 
         # gui setup
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+        """
+
+        QApplication.setAttribute(Qt.AA_SynthesizeTouchForUnhandledMouseEvents)
+        QApplication.setAttribute(Qt.AA_SynthesizeMouseForUnhandledTouchEvents)
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
+        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
+
         self.app = QApplication(sys.argv)
+
+
+
+        """
+        self.app.setAttribute(Qt.AA_SynthesizeMouseForUnhandledTouchEvents, True)
+        self.app.setAttribute(Qt.AA_SynthesizeTouchForUnhandledMouseEvents, True)
+        self.app.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+        self.app.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+        """
+
         self.gui = gui2.TabletGUI(
             slider_callback=self.set_shape,
             reset_callback=self.reset_all,
             countdown_callback=self.on_countdown,
             cartoon_callback=self.toggle_cartoon
         )
+
+        self.camera_window = gui2.CameraWindow()
+
+
+
+        """
+        screens = self.app.screens()
+
+        if len(screens) > 1:
+            main_screen = screens[1]      # HDMI-1
+            tablet_screen = screens[0]    # HDMI-2
+        else:
+            main_screen = screens[0]
+            tablet_screen = screens[0]
+
+        # --- CAMERA WINDOW ---
+        self.camera_window.setWindowFlag(Qt.FramelessWindowHint)
+        self.camera_window.show()
+        #self.camera_window.windowHandle().setScreen(main_screen)
+        self.camera_window.setGeometry(main_screen.geometry())
+        #self.camera_window.showFullScreen()
+        # CAMERA WINDOW
+        self.camera_window.setGeometry(main_screen.geometry())
+        self.camera_window.show()
+
+        # TABLET WINDOW
+        self.gui.setGeometry(tablet_screen.geometry())
         self.gui.show()
 
-        # camera window 
-        self.camera_window = gui2.CameraWindow()
-        self.camera_window.show()
+        # --- TABLET GUI ---
+        self.gui.setWindowFlag(Qt.FramelessWindowHint)
+        #self.gui.show()
+        #self.gui.windowHandle().setScreen(tablet_screen)
+        self.gui.setGeometry(tablet_screen.geometry())
+        self.gui.showFullScreen()
+        """
+
+
+        screens = self.app.screens()
+
+        for i, s in enumerate(screens):
+            print(i, s.name(), s.geometry())
+
+        main_screen = screens[1]
+        tablet_screen = screens[0] if len(screens) > 1 else screens[0]
+
+        # CAMERA (mirror)
+        self.camera_window.setWindowFlag(Qt.FramelessWindowHint)
+        self.camera_window.setGeometry(main_screen.geometry())
+        self.camera_window.showFullScreen()
+
+        # TABLET (controls)
+        self.gui.setWindowFlag(Qt.FramelessWindowHint)
+        self.gui.setGeometry(tablet_screen.geometry())
+        self.gui.showFullScreen()
 
         # frame timer
         self.timer = QTimer()
@@ -101,6 +199,8 @@ class AppController:
         self.plot_timer.start(200)
 
         # mirror shape plot
+
+        """
         self.fig, self.ax = plt.subplots(figsize=(4,10))
         self.line, = self.ax.plot([], [], 'r-')
         self.ax.set_title("Mirror Shape")
@@ -108,6 +208,9 @@ class AppController:
         self.ax.invert_yaxis()
         plt.ion()
         plt.show()
+        """
+
+
 
 
         # countdown
@@ -178,10 +281,17 @@ class AppController:
         height = self.height_detector.get_height_pixels(frame)
 
         if height:
-            if self.base_height is None: 
-                self.base_height = height 
+            self.height_history.append(height)
 
-            self.height_scale = height / self.base_height
+            if len(self.height_history) > 10:
+                self.height_history.pop(0)
+
+            smooth_height = sum(self.height_history) / len(self.height_history)
+
+            if self.base_height is None:
+                self.base_height = smooth_height
+
+            self.height_scale = smooth_height / self.base_height
 
 
         scaled_sliders = [int(v * self.height_scale) for v in self.slider_values]
@@ -233,29 +343,39 @@ class AppController:
 
 
     # mirror shape plot 
+
+    """
     def update_plot(self):
         # updates mirror shape plot
         if self.latest_frame is None:
             return
+    """
+    def update_plot(self):
+        if self.latest_frame is None:
+            return
 
-        
         mirror = processing2.calculate_shape(
             self.slider_values,
             length=self.latest_frame.shape[0]
         )
 
         y = np.arange(len(mirror))
-        self.line.set_data(mirror, y)
 
-        self.ax.set_ylim(0, self.latest_frame.shape[0])
-        self.ax.set_xlim(-12000, 12000)
-        self.ax.invert_yaxis()
+        ax = self.gui.ax
+        ax.clear()
 
-        self.fig.canvas.draw_idle()
-        self.fig.canvas.flush_events()
+        ax.plot(mirror, y, 'r-')
+        ax.set_xlim(-12000, 12000)
+        ax.set_ylim(0, self.latest_frame.shape[0])
+        ax.invert_yaxis()
+
+        self.gui.canvas.draw()
 
 
+    import subprocess
     # save image 
+
+    """
     def save_picture(self):
         # saves processed frame to disk
         if  self.latest_frame is None:
@@ -273,6 +393,38 @@ class AppController:
 
         cv2.imwrite(filename, processed)
         print("Saved:", filename)
+
+    """
+
+    def save_picture(self):
+        if self.latest_frame is None:
+            print("No frame to save")
+            return
+        
+        processed = self.process_frame(self.latest_frame)
+
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"capture_{ts}.png"
+        local_path = f"saved_images/{filename}"
+
+        cv2.imwrite(local_path, processed)
+        print("Saved locally:", local_path)
+
+        # qr code stuff
+        qr = qrcode.make(local_path)
+
+        buffer = BytesIO()
+        qr.save(buffer, format="PNG")
+
+        pixmap = QPixmap()
+        pixmap.loadFromData(buffer.getvalue())
+
+        # send to GUI
+        self.gui.show_qr(pixmap)
+
+
+
+
 
 
     def quit(self):

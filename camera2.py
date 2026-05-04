@@ -24,7 +24,7 @@ class Camera:
     def update(self):
         while True:
             _, frame_hold = self.cam.read()
-            #frame_hold = cv2.rotate(frame_hold, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            frame_hold = cv2.rotate(frame_hold, cv2.ROTATE_90_COUNTERCLOCKWISE)
             self.frame = cv2.flip(frame_hold, 1)
             self.frame_count += 1
             now = time.time()
